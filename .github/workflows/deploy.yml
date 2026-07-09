@@ -12,25 +12,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: maven
-
-      # The committed application-prod.properties only has placeholder values (safe for
-      # a public repo). The VM's real, live-tuned config (DB creds, admin password, web
-      # API key) lives entirely in this secret instead, so it never touches git history.
-      - name: Write real prod properties from secret
-        env:
-          STEVE_PROD_PROPERTIES: ${{ secrets.STEVE_PROD_PROPERTIES }}
-        run: |
-          printf '%s\n' "$STEVE_PROD_PROPERTIES" > src/main/resources/application-prod.properties
-
-      - name: Build WAR
-        run: ./mvnw -B package -Pprod,mysql -DskipTests
-
       - name: Set up SSH agent
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -39,14 +20,34 @@ jobs:
       - name: Trust VM host key
         run: ssh-keyscan -H 20.244.68.106 >> ~/.ssh/known_hosts
 
-      - name: Upload built WAR (staged, doesn't touch the live file yet)
+      # jOOQ codegen and Flyway migrate both run during `mvn package` (bound to
+      # generate-sources) and need a real, reachable MySQL - that only exists on
+      # the VM itself. So the source is synced there and built in place, exactly
+      # like the original manual process, rather than built on this runner.
+      # application-prod.properties is deliberately excluded - the VM's own
+      # real, already-configured copy is reused instead of the placeholder one
+      # from git, and it's never uploaded anywhere.
+      - name: Sync source to a build staging directory on the VM
         run: |
-          scp target/steve.war azureuser@20.244.68.106:/home/azureuser/steve-steve-3.13.0/target/steve.war.new
+          rsync -az --delete \
+            --exclude 'application-prod.properties' \
+            --exclude 'target' \
+            --exclude '.git' \
+            ./ azureuser@20.244.68.106:/home/azureuser/steve-deploy-staging/
 
-      - name: Swap in new WAR and restart steve, rolling back on failure
+      - name: Build on the VM, swap in the new WAR, restart with rollback on failure
         run: |
           ssh azureuser@20.244.68.106 '
             set -e
+            cd /home/azureuser/steve-deploy-staging
+
+            cp /home/azureuser/steve-steve-3.13.0/src/main/resources/application-prod.properties \
+               src/main/resources/application-prod.properties
+
+            JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 ./mvnw -B package -Pprod,mysql -DskipTests
+
+            cp target/steve.war /home/azureuser/steve-steve-3.13.0/target/steve.war.new
+
             cd /home/azureuser/steve-steve-3.13.0/target
             mv steve.war steve.war.bak
             mv steve.war.new steve.war
