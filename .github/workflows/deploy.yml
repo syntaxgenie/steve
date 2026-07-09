@@ -1,0 +1,64 @@
+name: Deploy to VM
+
+on:
+  push:
+    branches: [ master ]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      # The committed application-prod.properties only has placeholder values (safe for
+      # a public repo). The VM's real, live-tuned config (DB creds, admin password, web
+      # API key) lives entirely in this secret instead, so it never touches git history.
+      - name: Write real prod properties from secret
+        env:
+          STEVE_PROD_PROPERTIES: ${{ secrets.STEVE_PROD_PROPERTIES }}
+        run: |
+          printf '%s\n' "$STEVE_PROD_PROPERTIES" > src/main/resources/application-prod.properties
+
+      - name: Build WAR
+        run: ./mvnw -B package -Pprod,mysql -DskipTests
+
+      - name: Set up SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.STEVE_VM_SSH_KEY }}
+
+      - name: Trust VM host key
+        run: ssh-keyscan -H 20.244.68.106 >> ~/.ssh/known_hosts
+
+      - name: Upload built WAR (staged, doesn't touch the live file yet)
+        run: |
+          scp target/steve.war azureuser@20.244.68.106:/home/azureuser/steve-steve-3.13.0/target/steve.war.new
+
+      - name: Swap in new WAR and restart steve, rolling back on failure
+        run: |
+          ssh azureuser@20.244.68.106 '
+            set -e
+            cd /home/azureuser/steve-steve-3.13.0/target
+            mv steve.war steve.war.bak
+            mv steve.war.new steve.war
+            sudo systemctl restart steve
+            sleep 5
+            if sudo systemctl is-active --quiet steve; then
+              echo "steve restarted successfully"
+              rm -f steve.war.bak
+            else
+              echo "steve failed to start on the new build - rolling back"
+              mv steve.war.bak steve.war
+              sudo systemctl restart steve
+              exit 1
+            fi
+          '
