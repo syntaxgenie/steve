@@ -18,18 +18,13 @@
  */
 package de.rwth.idsg.steve.service.notification;
 
+import java.util.Optional;
 import lombok.Data;
-import org.joda.time.DateTime;
-
-/**
- * @author fnkbsi
- * @since 12.10.2022
- */
+import ocpp.cs._2015._10.RegistrationStatus;
 
 @Data
-public class OcppStationStatusSuspendedEV {
+public class OcppStationBooted {
 
   private final String chargeBoxId;
-  private final int connectorId;
-  private final DateTime timestamp;
+  private final Optional<RegistrationStatus> status;
 }

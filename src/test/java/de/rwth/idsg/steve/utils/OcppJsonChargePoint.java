@@ -24,7 +24,6 @@ import de.rwth.idsg.ocpp.jaxb.ResponseType;
 import de.rwth.idsg.steve.ocpp.OcppSecurityProfile;
 import de.rwth.idsg.steve.ocpp.OcppVersion;
 import de.rwth.idsg.steve.ocpp.ws.JsonObjectMapper;
-import de.rwth.idsg.steve.ocpp.ws.data.CommunicationContext;
 import de.rwth.idsg.steve.ocpp.ws.data.ErrorCode;
 import de.rwth.idsg.steve.ocpp.ws.data.MessageType;
 import de.rwth.idsg.steve.ocpp.ws.data.OcppJsonCall;
@@ -53,8 +52,6 @@ import org.jetbrains.annotations.Nullable;
 import org.opentest4j.AssertionFailedError;
 import org.springframework.boot.web.server.Ssl;
 import org.springframework.util.CollectionUtils;
-import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.adapter.jetty.JettyWebSocketSession;
 import tools.jackson.core.JsonParser;
 import tools.jackson.core.TreeNode;
 import tools.jackson.databind.JsonNode;
@@ -68,7 +65,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Deque;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -155,7 +151,25 @@ public class OcppJsonChargePoint {
             this.session = connect.get(); // block until session is created
             return this;
         } catch (Throwable t) {
+            // The client is started before the connection is attempted, and a caller cannot
+            // clean it up afterwards: close() begins with session.close(), and there is no
+            // session when we got here. Tests that expect start() to fail -- an unknown
+            // charge box, a wrong subprotocol -- would otherwise leave a Jetty client and
+            // its threads running for the rest of the fork.
+            stopClientQuietly();
             throw new RuntimeException(t);
+        }
+    }
+
+    /** Best effort: the exception from the failed start is the one worth reporting. */
+    private void stopClientQuietly() {
+        if (client == null) {
+            return;
+        }
+        try {
+            client.stop();
+        } catch (Exception e) {
+            log.warn("Failed to stop websocket client after a failed start", e);
         }
     }
 
@@ -269,15 +283,12 @@ public class OcppJsonChargePoint {
         call.setPayload(payload);
         call.setAction(action);
 
-        JettyWebSocketSession webSocketSession = new JettyWebSocketSession(Map.of());
-        webSocketSession.initializeNativeSession(session);
-
-        ExchangeContext<REQ, RES> ctx = new ExchangeContext<>(webSocketSession, chargeBoxId);
+        ExchangeContext<REQ, RES> ctx = new ExchangeContext<>();
         ctx.setOutgoingMessage(call);
         ctx.setResponseClass(responseClass);
         exchangeQueue.add(ctx);
 
-        Serializer.INSTANCE.accept(ctx);
+        ctx.setOutgoingString(Serializer.INSTANCE.accept(call));
 
         try {
             session.sendText(ctx.getOutgoingString(), NOOP);
@@ -309,10 +320,7 @@ public class OcppJsonChargePoint {
         call.setAction(getOperationName(requestClass));
         call.setPayload(expectedRequest);
 
-        JettyWebSocketSession webSocketSession = new JettyWebSocketSession(Map.of());
-        webSocketSession.initializeNativeSession(session);
-
-        ExchangeContext<REQ, RES> ctx = new ExchangeContext<>(webSocketSession, chargeBoxId);
+        ExchangeContext<REQ, RES> ctx = new ExchangeContext<>();
         ctx.setIncomingMessage(call);
         ctx.setOutgoingMessage(preparedResponse);
         ctx.setRequestClass(requestClass);
@@ -489,7 +497,7 @@ public class OcppJsonChargePoint {
         var outgoing = exchangeContext.getOutgoingMessage();
         outgoing.setMessageId(messageId);
 
-        Serializer.INSTANCE.accept(exchangeContext);
+        exchangeContext.setOutgoingString(Serializer.INSTANCE.accept(outgoing));
 
         try {
             session.sendText(exchangeContext.getOutgoingString(), NOOP);
@@ -549,15 +557,14 @@ public class OcppJsonChargePoint {
 
     @Getter(AccessLevel.PRIVATE)
     @Setter(AccessLevel.PRIVATE)
-    public final class ExchangeContext<REQ extends RequestType, RES extends ResponseType> extends CommunicationContext {
+    public final class ExchangeContext<REQ extends RequestType, RES extends ResponseType> {
 
         private Class<REQ> requestClass;
         private Class<RES> responseClass;
+        private OcppJsonMessage incomingMessage;
+        private OcppJsonMessage outgoingMessage;
+        private String outgoingString;
         private final CountDownLatch doneSignal = new CountDownLatch(1);
-
-        public ExchangeContext(@NotNull WebSocketSession session, @NotNull String chargeBoxId) {
-            super(session, chargeBoxId);
-        }
 
         public REQ await() {
             // wait for the call to arrive and be responded with

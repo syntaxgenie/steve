@@ -16,15 +16,21 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
-package de.rwth.idsg.steve.service.notification;
+package de.rwth.idsg.steve.utils.mapper;
 
-import java.util.Optional;
-import lombok.Data;
-import ocpp.cs._2015._10.RegistrationStatus;
+import jooq.steve.db.tables.records.AddressRecord;
+import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.Test;
 
-@Data
-public class OccpStationBooted {
+public class AddressMapperTest {
 
-  private final String chargeBoxId;
-  private final Optional<RegistrationStatus> status;
+    @Test
+    public void recordToDtoCopiesTimeZone() {
+        var record = new AddressRecord();
+        record.setTimeZone("Europe/Berlin");
+
+        var address = AddressMapper.recordToDto(record);
+
+        Assertions.assertEquals("Europe/Berlin", address.getTimeZone());
+    }
 }

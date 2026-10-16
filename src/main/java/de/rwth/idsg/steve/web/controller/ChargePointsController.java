@@ -26,6 +26,7 @@ import de.rwth.idsg.steve.web.dto.ChargePointBatchInsertForm;
 import de.rwth.idsg.steve.web.dto.ChargePointFormForCreate;
 import de.rwth.idsg.steve.web.dto.ChargePointFormForUpdate;
 import de.rwth.idsg.steve.web.dto.ChargePointQueryForm;
+import de.rwth.idsg.steve.web.dto.ChargePointQueryForm.ChargeBoxIdMatchType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
@@ -92,7 +93,7 @@ public class ChargePointsController {
 
     private void initList(Model model, ChargePointQueryForm params) {
         model.addAttribute(PARAMS, params);
-        model.addAttribute("cpList", chargePointService.getOverview(params));
+        model.addAttribute("cpList", chargePointService.getOverview(params, ChargeBoxIdMatchType.PatternMatchLike));
         model.addAttribute("unknownList", chargePointService.getUnknownChargePoints());
     }
 
@@ -103,7 +104,7 @@ public class ChargePointsController {
 
         model.addAttribute("chargePointForm", form);
         model.addAttribute("cp", cp);
-        addCountryCodes(model);
+        addAddressAttributes(model);
 
         return "data-man/chargepointDetails";
     }
@@ -132,7 +133,7 @@ public class ChargePointsController {
     public String addBatchPost(@Valid @ModelAttribute("batchChargePointForm") ChargePointBatchInsertForm form,
                                BindingResult result, Model model) {
         if (result.hasErrors()) {
-            addCountryCodes(model);
+            addAddressAttributes(model);
             model.addAttribute("chargePointForm", new ChargePointFormForCreate());
             return "data-man/chargepointAdd";
         }
@@ -173,8 +174,9 @@ public class ChargePointsController {
         return toOverview();
     }
 
-    protected void addCountryCodes(Model model) {
+    protected void addAddressAttributes(Model model) {
         model.addAttribute("countryCodes", ControllerHelper.COUNTRY_DROPDOWN);
+        model.addAttribute("timeZones", ControllerHelper.TIME_ZONE_DROPDOWN);
     }
 
     // -------------------------------------------------------------------------
@@ -200,7 +202,7 @@ public class ChargePointsController {
     // -------------------------------------------------------------------------
 
     private void setCommonAttributesForSingleAdd(Model model) {
-        addCountryCodes(model);
+        addAddressAttributes(model);
         model.addAttribute("batchChargePointForm", new ChargePointBatchInsertForm());
     }
 
